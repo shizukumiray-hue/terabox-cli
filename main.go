@@ -35,7 +35,7 @@ var version = "dev"
 
 const (
 	maxTelegramFileSize = 2000 * 1024 * 1024 // 2 GB
-	banner = `
+	banner              = `
 ========================================================================================
    ______                 ____               ________    ____
   /_  __/__  _________ _ / __ )____  _  __  / ____/ /   /  _/
@@ -670,5 +670,5 @@ func parseCaptionHTML(rawHTML string) (string, []tg.MessageEntityClass) {
 	if err := html.HTML(strings.NewReader(rawHTML), &b, html.Options{}); err != nil {
 		return rawHTML, nil
 	}
-	return b.Plain(), b.Entities()
+	return b.Complete()
 }
