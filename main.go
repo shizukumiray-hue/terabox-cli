@@ -659,3 +659,16 @@ func parseSelection(input string, total int) []int {
 	sort.Ints(result)
 	return result
 }
+
+func htmlEscape(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	return r.Replace(s)
+}
+
+func parseCaptionHTML(rawHTML string) (string, []tg.MessageEntityClass) {
+	var b entity.Builder
+	if err := html.HTML(strings.NewReader(rawHTML), &b, html.Options{}); err != nil {
+		return rawHTML, nil
+	}
+	return b.Plain(), b.Entities()
+}
