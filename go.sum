@@ -118,6 +118,6 @@ nhooyr.io/websocket v1.8.17/go.mod h1:rN9OFWIUwuxg4fR5tELlYC04bXYowCP9GX47ivo2l+
 github.com/valyala/bytebufferpool v1.0.0 h1:GqdtY6TfRNWhQQWTL9x93WChmknoRhflQQArUPKBnoQ=
 github.com/valyala/bytebufferpool v1.0.0/go.mod h1:6bBcMArwyJ5K/AmCkWv1jt77kVWyCJ6GTqnQma9wyp8=
 github.com/valyala/fasthttp v1.59.0 h1:Qu0qYHfXvPk1mSLNqcFtEk6DpxgA26hy6bmydotDpRI=
-github.com/valyala/fasthttp v1.59.0/go.mod h1:6j/N8rV41q1u+a5w8vN+zQY9t+12m5m42zYyX3w2i8s=
+github.com/valyala/fasthttp v1.59.0/go.mod h1:GTxNb9Bc6r2a9D0TWNSPwDz78UxnTGBViY3xZNEqyYU=
 rsc.io/qr v0.2.0 h1:6vBLea5/NRMVTz8V66gipeLycZMl/+UlFmk8DvqQ6WY=
 rsc.io/qr v0.2.0/go.mod h1:IF+uZjkb9fqyeF/4tlBoynqmQxUoPfWEKh921coOuXs=
