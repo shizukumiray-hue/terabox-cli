@@ -1,0 +1,100 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag / Nama Rilis (kosongkan untuk auto-increment v1.0.<run_number>)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set_version.outputs.version }}
+    steps:
+      - name: Compute version tag
+        id: set_version
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            TAG="v1.0.${{ github.run_number }}"
+          fi
+          echo "version=$TAG" >> $GITHUB_OUTPUT
+          echo "Target Version: $TAG"
+
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            output: terabox-cli-linux-amd64
+          - goos: linux
+            goarch: arm64
+            output: terabox-cli-linux-arm64
+          - goos: windows
+            goarch: amd64
+            output: terabox-cli-windows-amd64.exe
+          - goos: darwin
+            goarch: amd64
+            output: terabox-cli-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            output: terabox-cli-darwin-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -trimpath -ldflags="-s -w -X main.version=${{ needs.prepare.outputs.version }}" -o "${{ matrix.output }}" .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: Release ${{ needs.prepare.outputs.version }}
+          files: release-assets/*
+          generate_release_notes: true

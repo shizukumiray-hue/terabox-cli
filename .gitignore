@@ -1,0 +1,6 @@
+# .gitignore for terabox-cli
+terabox-sender
+*.exe
+*.log
+.env
+session*.json
