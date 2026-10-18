@@ -108,6 +108,9 @@ func main() {
 	// Cetak banner ASCII awal
 	printBanner()
 
+	// Verifikasi environment di awal
+	verifyEnvironment(apiIDStr, apiHash, botToken, targetUserID)
+
 	// Inisialisasi GOTD client sekali untuk seluruh sesi REPL
 	sessPath := "session_terabox.json"
 	if _, err := os.Stat("session.json"); err == nil {
@@ -484,8 +487,15 @@ func executeFastHTTPStreamPipe(ctx context.Context, dlURL string) (io.ReadCloser
 	req.Header.SetMethod(fasthttp.MethodGet)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	req.Header.Set("Referer", "https://www.terabox.com/")
-	if ndus := os.Getenv("TERABOX_NDUS"); ndus != "" {
-		req.Header.Set("Cookie", "ndus="+strings.TrimPrefix(ndus, "ndus="))
+	cookieVal := os.Getenv("TERABOX_NDUS")
+	if cookieVal == "" {
+		cookieVal = os.Getenv("TERABOX_COOKIE")
+	}
+	if cookieVal != "" {
+		if !strings.Contains(cookieVal, "=") {
+			cookieVal = "ndus=" + cookieVal
+		}
+		req.Header.Set("Cookie", cookieVal)
 	}
 
 	type streamInitResult struct {
@@ -502,10 +512,32 @@ func executeFastHTTPStreamPipe(ctx context.Context, dlURL string) (io.ReadCloser
 		defer fasthttp.ReleaseResponse(resp)
 
 		var err error
-		if dl, ok := ctx.Deadline(); ok {
-			err = fastHTTPClient.DoDeadline(req, resp, dl)
-		} else {
-			err = fastHTTPClient.Do(req, resp)
+		for redirectCount := 0; redirectCount < 5; redirectCount++ {
+			if dl, ok := ctx.Deadline(); ok {
+				err = fastHTTPClient.DoDeadline(req, resp, dl)
+			} else {
+				err = fastHTTPClient.Do(req, resp)
+			}
+
+			if err != nil {
+				break
+			}
+
+			statusCode := resp.StatusCode()
+			if statusCode == fasthttp.StatusMovedPermanently ||
+				statusCode == fasthttp.StatusFound ||
+				statusCode == fasthttp.StatusSeeOther ||
+				statusCode == fasthttp.StatusTemporaryRedirect ||
+				statusCode == 308 {
+				loc := resp.Header.Peek("Location")
+				if len(loc) == 0 {
+					break
+				}
+				req.SetRequestURIBytes(loc)
+				resp.Reset()
+				continue
+			}
+			break
 		}
 
 		if err != nil {
@@ -727,4 +759,38 @@ func buildTelegramAttributes(filename, mimeType string) []tg.DocumentAttributeCl
 	}
 
 	return attrs
+}
+
+func verifyEnvironment(apiID, apiHash, botToken string, targetID int64) {
+	fmt.Printf("\n%s🔍 Memverifikasi Konfigurasi Lingkungan (.env)...%s\n", colorBold, colorReset)
+	fmt.Printf("   ├─ TELEGRAM_API_ID    : %s%s%s\n", colorGreen, apiID, colorReset)
+
+	maskedHash := maskSecret(apiHash)
+	fmt.Printf("   ├─ TELEGRAM_API_HASH  : %s%s%s\n", colorGreen, maskedHash, colorReset)
+
+	maskedToken := maskSecret(botToken)
+	fmt.Printf("   ├─ TELEGRAM_BOT_TOKEN : %s%s%s\n", colorGreen, maskedToken, colorReset)
+	fmt.Printf("   ├─ TARGET_USER_ID     : %s%d%s\n", colorGreen, targetID, colorReset)
+
+	cookie := os.Getenv("TERABOX_NDUS")
+	cookieSource := "TERABOX_NDUS"
+	if cookie == "" {
+		cookie = os.Getenv("TERABOX_COOKIE")
+		cookieSource = "TERABOX_COOKIE"
+	}
+
+	if cookie != "" {
+		maskedCookie := maskSecret(strings.TrimPrefix(cookie, "ndus="))
+		fmt.Printf("   └─ %s        : %s%s (Aktif)%s\n", cookieSource, colorGreen, maskedCookie, colorReset)
+	} else {
+		fmt.Printf("   └─ TERABOX_COOKIE     : %sTidak diset (Opsional, file privat/limit butuh ini)%s\n", colorYellow, colorReset)
+	}
+	fmt.Printf("%s✅ Konfigurasi .env valid dan siap digunakan!%s\n\n", colorGreen, colorReset)
+}
+
+func maskSecret(s string) string {
+	if len(s) <= 8 {
+		return "********"
+	}
+	return s[:4] + strings.Repeat("*", len(s)-8) + s[len(s)-4:]
 }
