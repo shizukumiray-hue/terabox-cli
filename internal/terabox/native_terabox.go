@@ -68,7 +68,7 @@ func FetchTeraboxNativeUniversal(teraboxURL string) ([]TeraboxUniversalData, err
 		}
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
 
 	var candidates []string
 	if strings.HasPrefix(surl, "1") {

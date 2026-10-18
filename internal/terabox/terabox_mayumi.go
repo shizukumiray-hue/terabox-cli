@@ -233,7 +233,7 @@ func teraboxGetInfoRaw(client *http.Client, surl string, path string) (string, e
 		q.Add("dir", path)
 	}
 	reqURL.RawQuery = q.Encode()
-	req, _ := http.NewRequest("POST", reqURL.String(), nil)
+	req, _ := http.NewRequest("GET", reqURL.String(), nil)
 	req.Header.Set("User-Agent", teraboxUSER_AGENT)
 	req.AddCookie(&http.Cookie{Name: "ndus", Value: teraboxNDUSValue()})
 	res, err := client.Do(req)
@@ -245,36 +245,58 @@ func teraboxGetInfoRaw(client *http.Client, surl string, path string) (string, e
 	return string(body), nil
 }
 
-// teraboxResolveDlink menembak dlink mentah dan menangkap redirect 302 ke server CDN asli.
+// teraboxResolveDlink mengambil direct link CDN resmi via locatedownload API TeraBox.
 func teraboxResolveDlink(client *http.Client, dlink string) (string, error) {
-	req, err := http.NewRequest("GET", dlink, nil)
+	randStr, t := teraboxGenerateRand()
+
+	parsedURL, err := url.Parse(dlink)
 	if err != nil {
 		return "", err
 	}
+	originalQuery := parsedURL.Query()
+	pathParts := strings.Split(parsedURL.Path, "/")
+	lastPath := pathParts[len(pathParts)-1]
+
+	reqURL, _ := url.Parse("https://dm.terabox.com/rest/2.0/pcs/file")
+	q := reqURL.Query()
+	q.Add("app_id", "25028")
+	q.Add("method", "locatedownload")
+	q.Add("path", lastPath)
+	q.Add("clienttype", "8")
+	q.Add("devuid", teraboxDEVUID)
+	q.Add("rand", randStr)
+	q.Add("time", t)
+
+	for k, v := range originalQuery {
+		if len(v) > 0 {
+			q.Add(k, v[0])
+		}
+	}
+	reqURL.RawQuery = q.Encode()
+
+	req, _ := http.NewRequest("POST", reqURL.String(), nil)
 	req.Header.Set("User-Agent", teraboxUSER_AGENT)
 	req.AddCookie(&http.Cookie{Name: "ndus", Value: teraboxNDUSValue()})
 
-	// Buat client copy yang dilarang follow redirect (supaya kita bisa tangkap Location)
-	clientCopy := *client
-	clientCopy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-
-	res, err := clientCopy.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer res.Body.Close()
 
-	// Kalau Terabox merespon 302, ambil URL asli dari header Location
-	if res.StatusCode == 302 || res.StatusCode == 301 {
-		location := res.Header.Get("Location")
-		if location != "" {
-			return location, nil
-		}
+	bodyBytes, _ := io.ReadAll(res.Body)
+	var dlinkParsed struct {
+		Urls []struct {
+			URL string `json:"url"`
+		} `json:"urls"`
 	}
 
-	return "", fmt.Errorf("gagal resolve dlink, status: %d", res.StatusCode)
+	_ = json.Unmarshal(bodyBytes, &dlinkParsed)
+	if len(dlinkParsed.Urls) > 0 && dlinkParsed.Urls[0].URL != "" {
+		return dlinkParsed.Urls[0].URL, nil
+	}
+
+	return "", fmt.Errorf("locatedownload gagal / urls kosong")
 }
 
 // teraboxListRaw ambil daftar item (file + folder) dari satu folder share.
@@ -360,7 +382,7 @@ func teraboxItemToFileData(item map[string]interface{}, currentPath string) tera
 }
 
 // teraboxCollectFiles kumpulkan semua file dari share dengan listing folder paralel.
-// Jumlah worker mengikuti jumlah folder level-1 (dibatasi maxTeraboxWorkers).
+// Menggunakan goroutine dinamis untuk setiap folder yang ditemukan.
 func teraboxCollectFiles(client *http.Client, surl string) []teraboxFileData {
 	rootItems, err := teraboxListRaw(client, surl, "")
 	if err != nil {
@@ -384,77 +406,44 @@ func teraboxCollectFiles(client *http.Client, surl string) []teraboxFileData {
 		return files
 	}
 
-	workers := len(rootFolders)
-	if workers > maxTeraboxWorkers {
-		workers = maxTeraboxWorkers
-	}
-
-	type folderTask struct{ path string }
-	tasks := make(chan folderTask, maxTeraboxWorkers*4)
-
 	var mu sync.Mutex
-	var pending int
-	// schedule non-blocking: overflow dilempar ke goroutine supaya worker
-	// tidak pernah saling blokir send dan mati deadlock.
-	schedule := func(p string) {
-		mu.Lock()
-		pending++
-		mu.Unlock()
-		select {
-		case tasks <- folderTask{path: p}:
-		default:
-			go func() { tasks <- folderTask{path: p} }()
-		}
-	}
-	finish := func() {
-		mu.Lock()
-		pending--
-		done := pending == 0
-		mu.Unlock()
-		if done {
-			close(tasks)
-		}
-	}
-
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					logError("Panic di terabox-folder-walker",
-						zap.Any("recover", r), zap.Stack("stack"))
-					finish()
-				}
-			}()
-			for t := range tasks {
-				items, err := teraboxListRaw(client, surl, t.path)
-				if err != nil {
-					logError("Error fetching terabox folder",
-						zap.String("path", t.path),
-						zap.Error(err))
-					finish()
-					continue
-				}
-				for _, item := range items {
-					if teraboxIsDir(item) {
-						if sub, ok := item["path"].(string); ok && sub != "" {
-							schedule(sub)
-						}
-					} else {
-						mu.Lock()
-						files = append(files, teraboxItemToFileData(item, t.path))
-						mu.Unlock()
-					}
-				}
-				finish()
+
+	var walkFolder func(path string)
+	walkFolder = func(folderPath string) {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				logError("Panic di terabox-folder-walker",
+					zap.Any("recover", r), zap.Stack("stack"))
 			}
 		}()
+
+		items, err := teraboxListRaw(client, surl, folderPath)
+		if err != nil {
+			logError("Error fetching terabox folder",
+				zap.String("path", folderPath),
+				zap.Error(err))
+			return
+		}
+
+		for _, item := range items {
+			if teraboxIsDir(item) {
+				if sub, ok := item["path"].(string); ok && sub != "" {
+					wg.Add(1)
+					go walkFolder(sub)
+				}
+			} else {
+				mu.Lock()
+				files = append(files, teraboxItemToFileData(item, folderPath))
+				mu.Unlock()
+			}
+		}
 	}
 
 	for _, p := range rootFolders {
-		schedule(p)
+		wg.Add(1)
+		go walkFolder(p)
 	}
 	wg.Wait()
 	return files
@@ -475,9 +464,6 @@ func teraboxEnrichFiles(client *http.Client, teraboxURL string, files []teraboxF
 	}
 
 	workers := len(files)
-	if workers > maxTeraboxWorkers {
-		workers = maxTeraboxWorkers
-	}
 
 	idxCh := make(chan int)
 	var wg sync.WaitGroup
@@ -505,28 +491,13 @@ func teraboxEnrichFiles(client *http.Client, teraboxURL string, files []teraboxF
 				}
 
 				streamURL := ""
-				var lastStreamErr error
-				for _, cand := range candidates {
-					s, err := teraboxGenerateStreamURL(cand)
-					if err == nil && s != "" {
-						streamURL = s
-						break
-					}
-					lastStreamErr = err
-					logWarn("Gagal generate stream URL",
-						zap.String("filename", file.ServerFilename),
-						zap.String("candidate", cand),
-						zap.Error(err))
-				}
-				if streamURL == "" && lastStreamErr != nil {
-					logWarn("Semua kandidat stream gagal",
-						zap.String("filename", file.ServerFilename),
-						zap.Error(lastStreamErr))
+				if len(candidates) > 0 {
+					streamURL = candidates[0]
 				}
 
-				downloadURL := file.Dlink
-				if downloadURL == "" && len(candidates) > 0 {
-					downloadURL = candidates[0]
+				downloadURL := streamURL
+				if downloadURL == "" {
+					downloadURL = file.Dlink
 				}
 
 				results[idx] = TeraboxUniversalData{

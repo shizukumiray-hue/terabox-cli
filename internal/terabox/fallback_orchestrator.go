@@ -101,6 +101,7 @@ func FetchTeraboxUniversal(teraboxURL string) ([]TeraboxUniversalData, error) {
 		name string
 		fn   func(string) ([]TeraboxUniversalData, error)
 	}{
+		{"Komiktap API", FetchKomiktapUniversal},
 		{"Sechno API", FetchSechnoUniversal},
 		{"Terabox Mayumi", FetchTeraboxDirectUniversal},
 		{"Iteraplay", FetchIteraMediaUniversal},

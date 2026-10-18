@@ -31,14 +31,21 @@ type rawFileData struct {
 	FileName       string `json:"file_name"`
 	Thumbnail      string `json:"thumbnail"`
 	DownloadURL    string `json:"download_url"`
+	StreamURL      string `json:"stream_url"`
+	FastStreamURL  string `json:"fast_stream_url"`
 	StreamFinalURL string `json:"stream_final_url"`
 	FileSize       string `json:"file_size"`
 	FileSizeBytes  int64  `json:"file_size_bytes"`
+	Extension      string `json:"extension"`
 }
 
 type searchResponse struct {
-	Error bool          `json:"error"`
-	Data  []rawFileData `json:"data"`
+	Code     int           `json:"code"`
+	Status   bool          `json:"status"`
+	Message  string        `json:"message"`
+	Error    interface{}   `json:"error"`
+	Response []rawFileData `json:"response"`
+	Data     []rawFileData `json:"data"`
 }
 
 // Result struct sesuai permintaan
@@ -110,7 +117,7 @@ func FetchMedia(teraboxURL string) ([]Result, error) {
 	}
 
 	// 2. GET halaman utama untuk dapatkan cookie dan CSRF token
-	homeReq, err := http.NewRequest("GET", baseURL, nil)
+	homeReq, err := http.NewRequest("GET", baseURLFlow, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -168,8 +175,12 @@ func FetchMedia(teraboxURL string) ([]Result, error) {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
-	if apiResp.Error {
-		return nil, fmt.Errorf("API returned error")
+	items := apiResp.Response
+	if len(items) == 0 {
+		items = apiResp.Data
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("flowvideoplayer: no files found")
 	}
 
 	// 4. Generate ID dari short URL
@@ -180,16 +191,28 @@ func FetchMedia(teraboxURL string) ([]Result, error) {
 
 	// 5. Konversi ke Result
 	var results []Result
-	for _, raw := range apiResp.Data {
+	for _, raw := range items {
+		name := raw.FileName
+		if raw.Extension != "" && !strings.HasSuffix(name, raw.Extension) {
+			name += raw.Extension
+		}
+
+		stream := raw.FastStreamURL
+		if stream == "" {
+			stream = raw.StreamFinalURL
+		}
+		if stream == "" {
+			stream = raw.StreamURL
+		}
+
 		res := Result{
-			ID:        id, // ID sama untuk semua file dari satu URL (bisa disesuaikan jika perlu per file)
-			FileName:  raw.FileName,
+			ID:        id,
+			FileName:  name,
 			FileSize:  raw.FileSize,
 			CoverURL:  raw.Thumbnail,
-			StreamURL: raw.StreamFinalURL,
+			StreamURL: stream,
 			FileURL:   raw.DownloadURL,
 		}
-		// Jika ada field kosong, tetap aman karena default string kosong
 		results = append(results, res)
 	}
 

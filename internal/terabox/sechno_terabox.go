@@ -61,7 +61,7 @@ func FetchSechnoUniversal(teraboxURL string) ([]TeraboxUniversalData, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://sechno.com/api/terabox", bytes.NewReader(payload))
@@ -72,7 +72,7 @@ func FetchSechnoUniversal(teraboxURL string) ([]TeraboxUniversalData, error) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 	req.Header.Set("Referer", "https://sechno.com/tools/terabox-downloader")
 
-	client := &http.Client{Timeout: 25 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("sechno request failed: %w", err)

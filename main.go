@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gabriel-vasile/mimetype"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
@@ -56,8 +58,9 @@ const (
 	colorGreen  = "\033[32m"
 	colorYellow = "\033[33m"
 	colorBlue   = "\033[34m"
-	colorCyan   = "\033[36m"
-	colorWhite  = "\033[37m"
+	colorCyan    = "\033[36m"
+	colorMagenta = "\033[35m"
+	colorWhite   = "\033[37m"
 )
 
 var fastHTTPClient = &fasthttp.Client{
@@ -274,7 +277,7 @@ func processURL(
 	inputURL string,
 	reader *bufio.Reader,
 ) {
-	fmt.Printf("\n%s⏳ Mengekstrak media via Circuit Breaker (Sechno/Mayumi/Iteraplay/Flow/Netlify/Native)...%s\n", colorYellow, colorReset)
+	fmt.Printf("\n%s⏳ Mengekstrak media via Circuit Breaker (Komiktap/Sechno/Mayumi/Iteraplay/Flow/Netlify/Native)...%s\n", colorYellow, colorReset)
 	files, err := terabox.FetchTeraboxUniversal(inputURL)
 	if err != nil || len(files) == 0 {
 		fmt.Printf("%s❌ Gagal mengambil data Terabox: %v%s\n", colorRed, err, colorReset)
@@ -345,8 +348,16 @@ func processURL(
 			bodyReader = io.LimitReader(streamSafe, maxTelegramFileSize+1)
 		}
 
+		// MAGICPIPE: intip byte awal stream untuk deteksi MIME asli via mimetype (Zero-Disk)
+		detectedMime, magicStream, err := detectMagicPipe(bodyReader, fileTarget.FileName)
+		if err != nil {
+			fmt.Printf("   %s⚠️ Gagal deteksi magic bytes: %v. Gunakan ekstensi bawaan.%s\n", colorYellow, err, colorReset)
+		} else {
+			fmt.Printf("   %s🔮 MagicPipe MIME:%s %s%s%s\n", colorMagenta, colorReset, colorBold, detectedMime, colorReset)
+		}
+
 		pr := &progressReader{
-			reader:    bodyReader,
+			reader:    magicStream,
 			total:     totalSize,
 			name:      fileTarget.FileName,
 			startTime: time.Now(),
@@ -363,25 +374,21 @@ func processURL(
 
 		fmt.Printf("\n%s✅ Berhasil diunggah ke server Telegram. Mengirim pesan media...%s\n", colorGreen, colorReset)
 
-		mimeType := mime.TypeByExtension(filepath.Ext(fileTarget.FileName))
-		if mimeType == "" {
-			mimeType = "application/octet-stream"
-		}
+		tgAttributes := buildTelegramAttributes(fileTarget.FileName, detectedMime)
 
 		captionHTML := fmt.Sprintf(
-			"📁 <b>%s</b>\n<blockquote expandable>⚖️ <b>Ukuran:</b> <code>%s</code>\n⚡ <b>Engine:</b> <code>TeraBox FastStream</code>\n🤖 <b>Platform:</b> <i>TeraBox CLI</i></blockquote>",
+			"📁 <b>%s</b>\n<blockquote expandable>⚖️ <b>Ukuran:</b> <code>%s</code>\n🔮 <b>Format:</b> <code>%s</code>\n⚡ <b>Engine:</b> <code>TeraBox FastStream (MagicPipe)</code>\n🤖 <b>Platform:</b> <i>TeraBox CLI</i></blockquote>",
 			htmlEscape(fileTarget.FileName),
 			htmlEscape(fileTarget.FileSize),
+			htmlEscape(detectedMime),
 		)
 		msgText, entities := parseCaptionHTML(captionHTML)
 		docReq := &tg.MessagesSendMediaRequest{
 			Peer: peer,
 			Media: &tg.InputMediaUploadedDocument{
-				File:     uploadFile,
-				MimeType: mimeType,
-				Attributes: []tg.DocumentAttributeClass{
-					&tg.DocumentAttributeFilename{FileName: fileTarget.FileName},
-				},
+				File:       uploadFile,
+				MimeType:   detectedMime,
+				Attributes: tgAttributes,
 			},
 			Message:  msgText,
 			Entities: entities,
@@ -476,6 +483,10 @@ func executeFastHTTPStreamPipe(ctx context.Context, dlURL string) (io.ReadCloser
 	req.SetRequestURI(dlURL)
 	req.Header.SetMethod(fasthttp.MethodGet)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Referer", "https://www.terabox.com/")
+	if ndus := os.Getenv("TERABOX_NDUS"); ndus != "" {
+		req.Header.Set("Cookie", "ndus="+strings.TrimPrefix(ndus, "ndus="))
+	}
 
 	type streamInitResult struct {
 		statusCode    int
@@ -671,4 +682,49 @@ func parseCaptionHTML(rawHTML string) (string, []tg.MessageEntityClass) {
 		return rawHTML, nil
 	}
 	return b.Complete()
+}
+
+// detectMagicPipe mengintip bit header dari stream tanpa menguras stream asli (Zero-Disk)
+func detectMagicPipe(r io.Reader, filename string) (string, io.Reader, error) {
+	header := make([]byte, 3072)
+	n, err := io.ReadAtLeast(r, header, 1)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "application/octet-stream", r, err
+	}
+
+	header = header[:n]
+	mimeResult := mimetype.Detect(header)
+	detectedMime := mimeResult.String()
+
+	if detectedMime == "" || detectedMime == "application/octet-stream" {
+		if extMime := mime.TypeByExtension(filepath.Ext(filename)); extMime != "" {
+			detectedMime = extMime
+		} else {
+			detectedMime = "application/octet-stream"
+		}
+	}
+
+	fullStream := io.MultiReader(bytes.NewReader(header), r)
+	return detectedMime, fullStream, nil
+}
+
+// buildTelegramAttributes mengatur bentuk pengiriman dokumen/video/audio di Telegram
+func buildTelegramAttributes(filename, mimeType string) []tg.DocumentAttributeClass {
+	attrs := []tg.DocumentAttributeClass{
+		&tg.DocumentAttributeFilename{FileName: filename},
+	}
+
+	switch {
+	case strings.HasPrefix(mimeType, "video/"):
+		attrs = append(attrs, &tg.DocumentAttributeVideo{
+			SupportsStreaming: true,
+		})
+	case strings.HasPrefix(mimeType, "audio/"):
+		cleanTitle := strings.TrimSuffix(filename, filepath.Ext(filename))
+		attrs = append(attrs, &tg.DocumentAttributeAudio{
+			Title: cleanTitle,
+		})
+	}
+
+	return attrs
 }

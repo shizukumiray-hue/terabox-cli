@@ -24,8 +24,14 @@ type teraboxResponse struct {
 
 // fetchTeraboxData melakukan request ke API Netlify
 func fetchTeraboxData(apiURL string) (*teraboxResponse, error) {
-	client := &http.Client{Timeout: 40 * time.Second}
-	resp, err := client.Get(apiURL)
+	client := &http.Client{Timeout: 60 * time.Second}
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -36,9 +42,13 @@ func fetchTeraboxData(apiURL string) (*teraboxResponse, error) {
 		return nil, err
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
 	var data teraboxResponse
 	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unmarshal error (%s): %w", string(body), err)
 	}
 
 	if len(data.Files) == 0 {
